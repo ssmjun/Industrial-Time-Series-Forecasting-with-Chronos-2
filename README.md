@@ -55,5 +55,5 @@ You can run the full suite of experiments (Baseline to Fine-tuning) using the pr
 ### Experiment Scenarios included:
 - **Baseline:** Chronos (Zero-shot)
 - **Covariates:** Using process data (e.g., CO2, Temp) as context (Future values of covariates are not used)
-- **Cross-Learning:** Multivariate forecasting
+- **Cross-Learning:** 
 - **Fine-tuning:** Training Chronos on Samyang data
