@@ -224,7 +224,9 @@ class ChronosForecaster:
 
         pred_df, y_true_df = self.predict_from_dataloader(data['test'])
         
-        self.evaluate(pred_df, y_true_df)
+        metrics_df = self.evaluate(pred_df, y_true_df)
+        
+        return metrics_df, pred_df, y_true_df
 
     def evaluate(self, pred_df, y_true_df):
         # Merge to present a comparison table (id, timestamp, y_true, prediction)
@@ -278,6 +280,8 @@ class ChronosForecaster:
 
         metrics_df = pd.DataFrame(metrics)
         print(metrics_df.describe()[['mse', 'rmse', 'mae']])
+        
+        return metrics_df
 
     def _build_zero_shot_dfs(self, dataset):
         """
