@@ -13,6 +13,7 @@ def plot_forecast(
     history_length: int = 256,
     prediction_length: int = 196,
     title_suffix: str = "",
+    ax=None
 ):
     # helpers
     def _find_time_col(df):
@@ -108,10 +109,10 @@ def plot_forecast(
     forecast_series = pred_plot[pred_col]
 
     # ====== 여기서부터: 정보 + metric 출력 ======
-    print(f"\n=== plot_forecast: timeseries_id = {timeseries_id} ===")
+    #print(f"\n=== plot_forecast: timeseries_id = {timeseries_id} ===")
     #print(f"- history points (after trim): {0 if hist_series is None else len(hist_series)}")
-    print(f"- forecast horizon points (ground truth): {0 if gt_series_hor is None else len(gt_series_hor)}")
-    print(f"- forecast horizon points (prediction: '{pred_col}'):", len(forecast_series))
+    #print(f"- forecast horizon points (ground truth): {0 if gt_series_hor is None else len(gt_series_hor)}")
+    #print(f"- forecast horizon points (prediction: '{pred_col}'):", len(forecast_series))
 
     # metric 계산 (예측 vs ground truth, horizon 구간만)
     metrics = {"MSE": None, "RMSE": None, "MAE": None}
@@ -127,20 +128,16 @@ def plot_forecast(
             mae  = float(np.mean(np.abs(merged["gt"] - merged["pred"])))
             metrics = {"MSE": mse, "RMSE": rmse, "MAE": mae}
 
-            print("\n[Metrics on forecast horizon]")
-            print(f"  MSE : {mse:.6f}")
-            print(f"  RMSE: {rmse:.6f}")
-            print(f"  MAE : {mae:.6f}")
-
-            print("\n[Sample of gt vs pred]")
-            print(merged.head())
         else:
             print("\n[Metrics] No overlapping non-NaN points between gt and pred in forecast horizon.")
     else:
         print("\n[Metrics] No ground truth available in forecast horizon for this id.")
 
     # ====== Plot ======
-    fig, ax = plt.subplots(figsize=(15, 5))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(15, 5))
+    else:
+        fig = ax.get_figure()
 
     # 1) 히스토리
     #if hist_series is not None and len(hist_series) > 0:
@@ -185,8 +182,9 @@ def plot_forecast(
     )
 
     # 오른쪽에 legend 자리 확보 (rect의 오른쪽 여백 줄이기)
-    fig.tight_layout(rect=[0, 0, 0.8, 1])
+    # fig.tight_layout(rect=[0, 0, 0.8, 1])
 
-    plt.show()
+    if ax is None:
+        plt.show()
 
     return metrics
