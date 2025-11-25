@@ -41,6 +41,28 @@ You can run the full suite of experiments (Baseline to Fine-tuning) using the pr
     ./run_experiments.sh
     ```
     *Or run manually:* `bash run_experiments.sh`
+
+### 📁 Project Structure
+
+```
+Industrial-Time-Series-Forecasting-with-Chronos-2/
+├── Chronos.py              # Main Chronos forecaster class (fine-tuning, inference, evaluation)
+├── chronos_run.py          # Main entry point script for running experiments
+├── run_experiments.sh      # Shell script for running all experiment scenarios
+├── requirements.txt        # Python dependencies
+├── LICENSE                 # License file
+├── README.md               # Project documentation
+├── __init__.py             # Package initializer
+│
+├── Dataset/                # Dataset handling module
+│   └── custom_dataset.py   # Custom dataset classes and data loaders
+│
+├── Result/                 # Directory for plots of some samples at each trial 
+│
+└── utils/                  # Utility functions
+    ├── set_seed.py         # Random seed setting for reproducibility
+    └── util.py             # Visualization and plotting utilities
+```
 ### Key Files Description
 
 | File | Description |
