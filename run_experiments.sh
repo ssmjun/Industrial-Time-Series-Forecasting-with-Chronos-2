@@ -42,5 +42,9 @@ python chronos_run.py --use_chronos --fine_tune --use_covariates --use_cross_lea
 print_header "6. Continual Pretrained Model + Fine-tuning"
 python chronos_run.py --use_chronos --use_covariates --continual_pretrain --fine_tune
 
+# 7. Continual Pretrained Model
+print_header "7. Continual Pretrained Model + Fine-tuning + Cross Learning"
+python chronos_run.py --use_chronos --use_covariates --continual_pretrain --fine_tune --use_cross_learning
+
 # 종료 메시지
 echo -e "\n${GREEN}${BOLD}✅ All experiments completed successfully!${NC}\n"
