@@ -157,12 +157,15 @@ if __name__ == "__main__":
     exp_id = "Unknown"
     if args.use_chronos:
         if args.continual_pretrain:
-            exp_id = "6. Continual Pretrained Model + Fine-tuning"
+            if args.use_cross_learning:
+                exp_id = "7. Continual Pretrained Model + Fine-tuning + Cross Learning"
+            else:
+                exp_id = "6. Continual Pretrained Model + Fine-tuning"
         elif args.fine_tune:
             if args.use_cross_learning:
-                exp_id = "5. Fine-tuning - With Cross Learning"
+                exp_id = "5. Fine-tuning With Cross Learning"
             else:
-                exp_id = "4. Fine-tuning - No Cross Learning"
+                exp_id = "4. Fine-tuning No Cross Learning"
         else:
             if args.use_covariates:
                 if args.use_cross_learning:
