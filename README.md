@@ -2,6 +2,37 @@
 
 This repository contains code for forecasting industrial time series data using the Chronos-2 model.
 
+## 📁 Project Structure
+
+```
+Industrial-Time-Series-Forecasting-with-Chronos-2/
+├── Chronos.py              # Main Chronos forecaster class (fine-tuning, inference, evaluation)
+├── chronos_run.py          # Main entry point script for running experiments
+├── run_experiments.sh      # Shell script for running all experiment scenarios
+├── requirements.txt        # Python dependencies
+├── LICENSE                 # License file
+├── README.md               # Project documentation
+├── __init__.py             # Package initializer
+│
+├── Dataset/                # Dataset handling module
+│   └── custom_dataset.py   # Custom dataset classes and data loaders
+│
+└── utils/                  # Utility functions
+    ├── set_seed.py         # Random seed setting for reproducibility
+    └── util.py             # Visualization and plotting utilities
+```
+
+### Key Files Description
+
+| File | Description |
+|------|-------------|
+| `Chronos.py` | Contains `ChronosForecaster` class that wraps the Chronos-2 pipeline for time series forecasting with covariate selection, fine-tuning, and evaluation |
+| `chronos_run.py` | Entry point script with argument parsing and experiment orchestration logic |
+| `run_experiments.sh` | Automated script to run baseline, covariate, cross-learning, and fine-tuning experiments |
+| `Dataset/custom_dataset.py` | Implements `Dataset_Custom` for data loading, preprocessing, and `DataLoader` creation |
+| `utils/set_seed.py` | Utility for setting random seeds (PyTorch, NumPy, Python random) |
+| `utils/util.py` | Plotting functions for forecast visualization with metrics |
+
 ## 1. Installation
 
 ### A. Set up Conda Environment
