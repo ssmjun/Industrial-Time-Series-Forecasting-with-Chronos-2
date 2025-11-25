@@ -48,7 +48,7 @@ You can run the full suite of experiments (Baseline to Fine-tuning) using the pr
 | `Chronos.py` | Contains `ChronosForecaster` class that wraps the Chronos-2 pipeline for time series forecasting with covariate selection, fine-tuning, and evaluation |
 | `chronos_run.py` | Entry point script with argument parsing and experiment orchestration logic |
 | `run_experiments.sh` | Automated script to run baseline, covariate, cross-learning, and fine-tuning experiments |
-| `Dataset/custom_dataset.py` | Implements `Dataset_Custom` for data loading, preprocessing, and `DataLoader` creation. Also in this repository, any dataset is not included. |
+| `Dataset/custom_dataset.py` | Implements `Dataset_Custom` for data loading, preprocessing, and `DataLoader` creation. In this repository, any dataset is not included. |
 | `utils/util.py` | Generates plots for samples corresponding to the MSE quartiles (0%, 25%, 50%, 75%, and 100%) |
 
 
