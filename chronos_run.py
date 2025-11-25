@@ -9,6 +9,8 @@ import torch.nn as nn
 import argparse
 
 from utils.set_seed import set_seed
+from utils.util import plot_forecast
+import matplotlib.pyplot as plt
 
 from Dataset.custom_dataset import get_dataloader, load_manufacturing_data
 from Chronos import ChronosForecaster
@@ -115,6 +117,11 @@ if __name__ == "__main__":
 
     # If use_chronos flag is set, run Chronos-2 inference on test loader
     forecaster = ChronosForecaster(args)
+    
+    metrics_df = None
+    pred_df = None
+    y_true_df = None
+
     if args.use_chronos and args.continual_pretrain:
         print("\n" + "=" * 80)
         print("LOADING DATA")
@@ -133,15 +140,76 @@ if __name__ == "__main__":
         forecaster.fine_tune(data_loader)
         
         # 3. Inference
-        result = forecaster.run(data_loader)
+        metrics_df, pred_df, y_true_df = forecaster.run(data_loader)
         
         print("Chronos-2 inference with continual pretraining + fine-tuning completed.")
 
     elif args.use_chronos and args.fine_tune and not args.continual_pretrain:
         forecaster.fine_tune(data_loader)
         print("Chronos-2 fine-tuning completed.")
-        result = forecaster.run(data_loader)
+        metrics_df, pred_df, y_true_df = forecaster.run(data_loader)
     
     elif args.use_chronos:
-        result = forecaster.run(data_loader)
+        metrics_df, pred_df, y_true_df = forecaster.run(data_loader)
         print("Chronos-2 zero-shot inference completed.")
+
+    # Determine experiment ID based on args
+    exp_id = "Unknown"
+    if args.use_chronos:
+        if args.continual_pretrain:
+            exp_id = "6. Continual Pretrained Model + Fine-tuning"
+        elif args.fine_tune:
+            if args.use_cross_learning:
+                exp_id = "5. Fine-tuning - With Cross Learning"
+            else:
+                exp_id = "4. Fine-tuning - No Cross Learning"
+        else:
+            if args.use_covariates:
+                if args.use_cross_learning:
+                    exp_id = "3. With Covariates, With Cross Learning"
+                else:
+                    exp_id = "2. With Covariates, No Cross Learning"
+            else:
+                exp_id = "1. No Covariates, No Cross Learning"
+
+    # Plotting logic for MSE quartiles
+    if metrics_df is not None and pred_df is not None and y_true_df is not None:
+        print("\nGenerating plots for MSE quartiles (0%, 25%, 50%, 75%, 100%)...")
+        
+        quantiles = [0.0, 0.25, 0.5, 0.75, 1.0]
+        selected_ids = []
+        sorted_metrics = metrics_df.sort_values(by='mse')
+        n = len(sorted_metrics)
+
+        for q in quantiles:
+            idx = int((n - 1) * q)
+            row = sorted_metrics.iloc[idx]
+            selected_ids.append((q, row['id'], row['mse']))
+
+        fig, axes = plt.subplots(5, 1, figsize=(15, 25))
+        if len(quantiles) == 1:
+            axes = [axes] # Handle single plot case if needed
+        
+        # Add experiment title to the figure
+        fig.suptitle(f"Experiment: {exp_id}", fontsize=16, y=0.99)
+
+        for (q, sid, mse), ax in zip(selected_ids, axes):
+            plot_forecast(
+                context_df=pd.DataFrame(), # Context not used in current util.py implementation
+                pred_df=pred_df,
+                test_df=y_true_df,
+                target_column=args.target,
+                timeseries_id=sid,
+                prediction_length=args.pred_len,
+                ax=ax,
+                title_suffix=f"(MSE Quantile: {int(q*100)}%, MSE: {mse:.4f})"
+            )
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.98]) # Adjust layout to make room for suptitle
+        
+        # Create a safe filename from exp_id
+        safe_exp_id = exp_id.replace(" ", "_").replace(".", "").replace(",", "").replace("+", "plus")
+        filename = f'result/EX{safe_exp_id}.png'
+        plt.savefig(filename)
+        print(f"Saved plot to {filename}")
+        # plt.show() # Uncomment if running in an environment that supports display
