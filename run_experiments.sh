@@ -1,7 +1,5 @@
 #!/bin/bash
-# ==========================================
-# 출력 스타일 설정 (색상 및 구분선)
-# ==========================================
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -16,15 +14,9 @@ print_header() {
     echo -e "${BLUE}############################################################${NC}\n"
 }
 
-
-
 # ==========================================
 # 실험 시작
 # ==========================================
-
-# 0. Linear Regression Baseline
-print_header "0. Linear Regression Baseline"
-python linear_regression.py
 
 # 1. No Covariates, No Cross Learning
 print_header "1. No Covariates, No Cross Learning"
