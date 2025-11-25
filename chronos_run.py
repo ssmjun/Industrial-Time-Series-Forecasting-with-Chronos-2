@@ -22,7 +22,7 @@ pd.set_option('display.max_columns', 50)
 def get_argument_parser():
     parser = argparse.ArgumentParser()
     # Pretrain dataset directory and files
-    parser.add_argument('--data_dir', type=str, default='/home/minjunson/project/Chronos_2.0/Models/Dataset', help='data directory')
+    parser.add_argument('--data_dir', type=str, default='./Dataset', help='data directory')
     parser.add_argument('--pretrain_files', nargs='+', default=['ai4i2020.csv', 'IoT.csv', 'Steel_industry.csv'], help='pretraining dataset files')
     
     # Dataset
