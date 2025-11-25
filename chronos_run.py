@@ -191,7 +191,7 @@ if __name__ == "__main__":
             axes = [axes] # Handle single plot case if needed
         
         # Add experiment title to the figure
-        fig.suptitle(f"Experiment: {exp_id}", fontsize=16, y=0.99)
+        fig.suptitle(f"Experiment: {exp_id} with mean MSE = {metrics_df['mse'].mean():.2f}", fontsize=16, y=0.99)
 
         for (q, sid, mse), ax in zip(selected_ids, axes):
             plot_forecast(
