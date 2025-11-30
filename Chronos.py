@@ -158,6 +158,16 @@ class ChronosForecaster:
         # Use a smaller batch size for fine-tuning to avoid OOM/NVML errors
         # args.batch_size is typically 128, which is too large for fine-tuning
         ft_batch_size = min(self.args.batch_size, 8) 
+        
+        """
+        # 파인튜닝 대상 모듈 확인용 코드
+        print("=== 학습(업데이트) 대상 파라미터 목록 ===")
+        for name, param in self.pipeline.model.named_parameters():
+            if param.requires_grad:
+                print(f"Training: {name}")
+            else:
+                print(f"Frozen: {name}")
+        """
         print(f"Starting fine-tuning with batch_size={ft_batch_size}...")
 
         self.pipeline = self.pipeline.fit(
@@ -210,6 +220,7 @@ class ChronosForecaster:
             )
         
         print("Continual pretraining completed.")
+    
     def run(self, data):
         """
         Run the full Chronos forecasting experiment:
@@ -224,6 +235,27 @@ class ChronosForecaster:
 
         pred_df, y_true_df = self.predict_from_dataloader(data['test'])
         
+        # Get scaler for inverse transform
+        scaler = None
+        if hasattr(data['test'].dataset, 'y_scaler'):
+            scaler = data['test'].dataset.y_scaler
+        
+        # --- Apply Inverse Transform BEFORE evaluation ---
+        if scaler is not None:
+            #print("Applying Inverse Transform to predictions and targets...")
+            # Inverse transform y_true
+            if self.args.target in y_true_df.columns:
+                y_true_df[self.args.target] = scaler.inverse_transform(y_true_df[[self.args.target]].values).flatten()
+            
+            # Inverse transform predictions (all quantile columns)
+            # Filter only numeric columns and exclude id/TimeStamp/Target
+            pred_cols = [c for c in pred_df.select_dtypes(include=[np.number]).columns 
+                         if c not in ['id', 'TimeStamp', self.args.target]]
+            
+            for col in pred_cols:
+                 pred_df[col] = scaler.inverse_transform(pred_df[[col]].values).flatten()
+        # -------------------------------------------------
+
         metrics_df = self.evaluate(pred_df, y_true_df)
         
         return metrics_df, pred_df, y_true_df
@@ -267,6 +299,7 @@ class ChronosForecaster:
             columns={true_col: 'y_true', pred_col: 'y_pred'}
         )
 
+
         # --- Per-sequence metrics (MSE / RMSE / MAE) across all sequences in data_loader['test'] ---
         metrics = []
         for sid, g in result_table.groupby('id'):
@@ -295,6 +328,34 @@ class ChronosForecaster:
         target_col = self.args.target
 
         df = dataset.data.copy().reset_index(drop=True)
+        
+        # --- Apply Scaling if available ---
+        if hasattr(dataset, 'scale') and dataset.scale and hasattr(dataset, 'y_scaler'):
+            # Scale Target
+            target_data = df[[target_col]].values
+            df[target_col] = dataset.y_scaler.transform(target_data).flatten()
+            
+            # Scale Covariates
+            if hasattr(dataset, 'x_scaler'):
+                # Dataset_Custom fits x_scaler on all columns except TimeStamp and target.
+                # This includes 'outlier' if it exists. We must include it for transform to work.
+                scaler_cols = [c for c in df.columns if c not in ['TimeStamp', target_col]]
+                
+                try:
+                    # Transform all columns including outlier
+                    scaled_values = dataset.x_scaler.transform(df[scaler_cols].values)
+                    
+                    # Create temporary dataframe to map back to columns
+                    scaled_df = pd.DataFrame(scaled_values, columns=scaler_cols, index=df.index)
+                    
+                    # Update df with scaled values, BUT skip 'outlier' to preserve 0/1 flags for filtering
+                    update_cols = [c for c in scaler_cols if c != 'outlier']
+                    df[update_cols] = scaled_df[update_cols]
+                    
+                except Exception as e:
+                    print(f"Warning: Could not scale features: {e}")
+        # ----------------------------------
+
         time_col = "TimeStamp"
 
         # Determine covariates
@@ -355,6 +416,7 @@ class ChronosForecaster:
 
         context_df = pd.concat(context_parts, ignore_index=True)
         future_df = pd.concat(future_parts, ignore_index=True)
+    
         y_true_df = pd.concat(y_true_parts, ignore_index=True)
 
         return context_df, future_df, y_true_df
