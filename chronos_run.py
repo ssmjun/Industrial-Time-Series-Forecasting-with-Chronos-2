@@ -1,4 +1,3 @@
-# %%
 import pandas as pd
 import numpy as np
 import torch
@@ -7,6 +6,7 @@ from math import sqrt
 from torch import optim
 import torch.nn as nn
 import argparse
+import os
 
 from utils.set_seed import set_seed
 from utils.util import plot_forecast
@@ -38,9 +38,11 @@ def get_argument_parser():
     parser.add_argument('--model_name', type=str, default='Chronos', help='model name')
 
     # Train
-    parser.add_argument('--learning_rate', type=float, default=1e-6, help='learning_rate')
+    parser.add_argument('--ft_learning_rate', type=float, default=1e-6, help='learning_rate for fine-tuning')
+    parser.add_argument('--pt_learning_rate', type=float, default=5e-6, help='learning_rate for fine-tuning')
     parser.add_argument('--batch_size', type=int, default=4, help='batch size')
     parser.add_argument('--num_steps', type=int, default=400, help='number of fine-tune steps')
+    parser.add_argument('--pretrain_steps', type=int, default=400, help='number of pretrain steps')
     parser.add_argument('--seed', type=int, default=1, help='seed')
     parser.add_argument('--device_num', type=str, default='0', help='set gpu number')
     #parser.add_argument('--patience', type=int, default=100, help='train patience')
@@ -53,6 +55,7 @@ def get_argument_parser():
     parser.add_argument('--cov_corr_threshold', type=float, default=0.5, help='min abs correlation to keep a covariate')
     parser.add_argument('--fine_tune', default = False, action='store_true', help='fine-tune Chronos-2 model')
     parser.add_argument('--continual_pretrain', default = False, action='store_true', help='continual pretrain Chronos-2 model')
+    parser.add_argument('--use_das', default = False, action='store_true', help='use DAS for continual pretraining')
 
     #args = parser.parse_args(args=[])
     args = parser.parse_args()
@@ -134,6 +137,11 @@ if __name__ == "__main__":
         )
         
         # 1. Continual Pretraining
+        if args.use_das:
+            print("Using DAS for Continual Pretraining...")
+        else:
+            print("Using Standard Continual Pretraining...")
+
         forecaster.continual_pretrain(manufacturing_datasets)
         
         # 2. Fine-tuning on target dataset
@@ -157,10 +165,16 @@ if __name__ == "__main__":
     exp_id = "Unknown"
     if args.use_chronos:
         if args.continual_pretrain:
-            if args.use_cross_learning:
-                exp_id = "7. Continual Pretrained Model + Fine-tuning + Cross Learning"
+            if args.use_das:
+                if args.use_cross_learning:
+                    exp_id = "8. DAS Continual Pretrained + Fine-tuning + Cross Learning"
+                else:
+                    exp_id = "8. DAS Continual Pretrained + Fine-tuning"
             else:
-                exp_id = "6. Continual Pretrained Model + Fine-tuning"
+                if args.use_cross_learning:
+                    exp_id = "7. Continual Pretrained Model + Fine-tuning + Cross Learning"
+                else:
+                    exp_id = "6. Continual Pretrained Model + Fine-tuning"
         elif args.fine_tune:
             if args.use_cross_learning:
                 exp_id = "5. Fine-tuning With Cross Learning"
@@ -215,4 +229,26 @@ if __name__ == "__main__":
         filename = f'result/EX{safe_exp_id}.png'
         plt.savefig(filename)
         print(f"Saved plot to {filename}")
-        # plt.show() # Uncomment if running in an environment that supports display
+
+        # Save results to log file
+        log_path = "result/result_log.txt"
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        
+        with open(log_path, "a") as f:
+            f.write(f"\n{'='*20} Experiment Log: {pd.Timestamp.utcnow().tz_localize(None) + pd.Timedelta(hours=9)} (UTC+9) {'='*20}\n")
+            f.write(f"Experiment ID: {exp_id}\n")
+            f.write(f"Settings:\n")
+            for arg, value in vars(args).items():
+                f.write(f"  {arg}: {value}\n")
+            
+            if metrics_df is not None:
+                mean_metrics = metrics_df[['mse', 'rmse', 'mae']].mean()
+                f.write(f"\nMetrics (Average):\n")
+                f.write(f"  MSE: {mean_metrics['mse']:.4f}\n")
+                f.write(f"  RMSE: {mean_metrics['rmse']:.4f}\n")
+                f.write(f"  MAE: {mean_metrics['mae']:.4f}\n")
+            else:
+                f.write("\nMetrics: None (Inference not run or failed)\n")
+            f.write(f"{'='*60}\n")
+        
+        print(f"Appended experiment results to {log_path}")
