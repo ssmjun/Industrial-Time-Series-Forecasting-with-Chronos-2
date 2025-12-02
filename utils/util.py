@@ -188,3 +188,70 @@ def plot_forecast(
         plt.show()
 
     return metrics
+
+def plot_das_heatmap(importance_dict, save_path="das_heatmap.png"):
+    """
+    Plot DAS Importance Score Heatmap (Layers vs Heads).
+    Aggregates importance from Q, K, V, O weights for each head in each layer.
+    """
+    num_layers = 12
+    num_heads = 12
+    d_model = 768
+    d_head = 64
+    
+    heatmap_data = np.zeros((num_layers, num_heads))
+    
+    print("Generating DAS Importance Heatmap...")
+    
+    for l in range(num_layers):
+        # We focus on the first self-attention layer in each block
+        # Pattern: encoder.block.{l}.layer.0.self_attention.{q,k,v,o}.weight
+        
+        # Q, K, V weights: (d_model, d_model) -> (num_heads * d_head, d_model)
+        # We want to split rows by head
+        for kind in ['q', 'k', 'v']:
+            key = f"encoder.block.{l}.layer.0.self_attention.{kind}.weight"
+            if key in importance_dict:
+                imp = importance_dict[key].float().numpy() # (768, 768)
+                # Reshape to (num_heads, d_head, d_model)
+                imp_reshaped = imp.reshape(num_heads, d_head, d_model)
+                # Sum importance for each head
+                head_imp = imp_reshaped.sum(axis=(1, 2)) # (num_heads,)
+                heatmap_data[l] += head_imp
+                
+        # O weight: (d_model, d_model) -> (d_model, num_heads * d_head)
+        # We want to split columns by head
+        key = f"encoder.block.{l}.layer.0.self_attention.o.weight"
+        if key in importance_dict:
+            imp = importance_dict[key].float().numpy() # (768, 768)
+            # Reshape to (d_model, num_heads, d_head)
+            imp_reshaped = imp.reshape(d_model, num_heads, d_head)
+            # Sum importance for each head
+            head_imp = imp_reshaped.sum(axis=(0, 2)) # (num_heads,)
+            heatmap_data[l] += head_imp
+
+    # Normalize to [0, 1]
+    if heatmap_data.max() > 0:
+        heatmap_data = heatmap_data / heatmap_data.max()
+        
+    # Plot
+    plt.figure(figsize=(10, 8))
+    plt.imshow(heatmap_data, cmap='YlOrRd', aspect='auto', origin='upper')
+    plt.colorbar(label='Importance Score')
+    plt.xlabel('Head Index')
+    plt.ylabel('Layer Index')
+    plt.title('DAS Importance Score (Layers vs Heads)')
+    plt.xticks(range(num_heads), [f'H{i}' for i in range(num_heads)])
+    plt.yticks(range(num_layers), [f'L{i}' for i in range(num_layers)])
+    
+    # Add text annotations
+    for i in range(num_layers):
+        for j in range(num_heads):
+            color = "black" if heatmap_data[i, j] < 0.5 else "white"
+            plt.text(j, i, f'{heatmap_data[i, j]:.2f}', 
+                     ha="center", va="center", color=color, fontsize=8)
+            
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"Saved DAS heatmap to {save_path}")
