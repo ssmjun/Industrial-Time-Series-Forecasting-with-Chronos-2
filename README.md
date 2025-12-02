@@ -55,7 +55,8 @@ Industrial-Time-Series-Forecasting-with-Chronos-2/
 ├── __init__.py             # Package initializer
 │
 ├── Dataset/                # Dataset handling module
-│   └── custom_dataset.py   # Custom dataset classes and data loaders
+│   ├── custom_dataset.py   # Custom dataset classes and data loaders
+│   └── (dataset csv file)  # Add your dataset here
 │
 ├── Result/                 # Directory for plots of some samples at each trial 
 │
