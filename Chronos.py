@@ -81,7 +81,6 @@ class ChronosForecaster:
         
         self.covariate_list = [c for c in candidates if abs(avg_corr.get(c, 0)) >= self.args.cov_corr_threshold]
         
-
     def fine_tune(self, data_loader):
         """
         Fine-tune the Chronos model on the training data.
@@ -181,15 +180,96 @@ class ChronosForecaster:
         )
         print("Fine-tuning completed.")
 
+    def _custom_fit(self, inputs, num_steps, learning_rate, batch_size, validation_inputs=None, save_strategy="no"):
+        """
+        Custom fit method that uses the existing model instance (self.pipeline.model)
+        instead of creating a copy. This allows hooks registered on the model to work.
+        """
+        from chronos.chronos2.dataset import Chronos2Dataset, DatasetMode
+        from chronos.chronos2.trainer import Chronos2Trainer
+        from transformers import TrainingArguments
+        import time
+        from pathlib import Path
+
+        # Prepare Dataset
+        context_length = self.pipeline.model.chronos_config.context_length
+        prediction_length = self.args.pred_len
+        min_past = prediction_length
+        
+        train_dataset = Chronos2Dataset.convert_inputs(
+            inputs=inputs,
+            context_length=context_length,
+            prediction_length=prediction_length,
+            batch_size=batch_size,
+            output_patch_size=self.pipeline.model_output_patch_size,
+            min_past=min_past,
+            mode=DatasetMode.TRAIN,
+        )
+
+        eval_dataset = None
+        if validation_inputs is not None:
+            eval_dataset = Chronos2Dataset.convert_inputs(
+                inputs=validation_inputs,
+                context_length=context_length,
+                prediction_length=prediction_length,
+                batch_size=batch_size,
+                output_patch_size=self.pipeline.model_output_patch_size,
+                mode=DatasetMode.VALIDATION,
+            )
+
+        output_dir = Path("chronos-2-finetuned") / time.strftime("%Y-%m-%d_%H-%M-%S")
+
+        training_args = TrainingArguments(
+            output_dir=str(output_dir),
+            per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size,
+            learning_rate=learning_rate,
+            lr_scheduler_type="linear",
+            warmup_ratio=0.0,
+            optim="adamw_torch_fused",
+            logging_steps=100,
+            max_steps=num_steps,
+            gradient_accumulation_steps=1,
+            dataloader_num_workers=0, 
+            tf32=False, 
+            bf16=True, 
+            save_strategy=save_strategy,
+            report_to="none",
+            use_cpu=not torch.cuda.is_available(),
+            eval_strategy="steps" if eval_dataset else "no",
+            eval_steps=100 if eval_dataset else None,
+        )
+
+        trainer = Chronos2Trainer(
+            model=self.pipeline.model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+        
+        trainer.train()
+
     def continual_pretrain(self, manufacturing_datasets):
         """
         Continual pretraining on additional manufacturing datasets.
         manufacturing_datasets: List of numpy arrays (T, F)
         """
+        import copy
+        import torch.nn.functional as F
+        from utils.util import plot_das_heatmap
+
         print("Preparing data for continual pretraining...")
         
         ft_batch_size = min(self.args.batch_size, 8)
         
+        # Initialize importance if DAS is enabled
+        if self.args.use_das:
+            print("DAS Enabled: Initializing importance...")
+            self.importance = {}
+            for name, param in self.pipeline.model.named_parameters():
+                if param.requires_grad:
+                    self.importance[name] = torch.zeros_like(param).detach().cpu()
+
         for idx, data in enumerate(manufacturing_datasets):
             print(f"Processing dataset {idx + 1}/{len(manufacturing_datasets)} for pretraining...")
             train_inputs = []
@@ -208,16 +288,96 @@ class ChronosForecaster:
                 
             print(f"Starting pretraining step {idx + 1} with batch_size={ft_batch_size}...")
             
-            # We use the same fit method but on this new data
+            # --- DAS Step 1: Register Mask Hooks ---
+            mask_hooks = []
+            if self.args.use_das and hasattr(self, 'importance'):
+                print(" > Applying DAS Soft-Masking...")
+                def get_mask_hook(name_loc):
+                    imp_cpu = self.importance[name_loc]
+                    def hook(grad):
+                        with torch.no_grad():
+                            imp = imp_cpu.to(grad.device)
+                            mean = imp.mean()
+                            std = imp.std() + 1e-6
+                            standardized = (imp - mean) / std
+                            
+                            temperature = getattr(self.args, 'das_temperature', 1.0)
+                            soft_mask_val = (torch.tanh(standardized / temperature) + 1) / 2
+                            
+                            strength = getattr(self.args, 'das_strength', 1.0)
+                            mask = 1.0 - (soft_mask_val * strength)
+                        return grad * mask
+                    return hook
+
+                for name, param in self.pipeline.model.named_parameters():
+                    if param.requires_grad and name in self.importance:
+                        mask_hooks.append(param.register_hook(get_mask_hook(name)))
+
+            # --- Training ---
+            # Use _custom_fit to ensure hooks work on the actual model being trained
+            """
             self.pipeline = self.pipeline.fit(
                 inputs=train_inputs,
                 prediction_length=self.args.pred_len,
-                num_steps=self.args.num_steps, 
+                num_steps=self.args.pretrain_steps, 
                 learning_rate=self.args.learning_rate,
                 batch_size=ft_batch_size,
-                logging_steps=500,
-                save_strategy="no"
             )
+            """
+            self._custom_fit(
+                inputs=train_inputs,
+                num_steps=self.args.pretrain_steps, 
+                learning_rate=self.args.learning_rate,
+                batch_size=ft_batch_size,
+            )
+
+            # --- DAS Step 2: Remove Mask Hooks ---
+            for h in mask_hooks:
+                h.remove()
+
+            # --- DAS Step 3: Probe & Accumulate ---
+            if self.args.use_das:
+                print(f" > Calculating Importance for Dataset {idx + 1}...")
+                trained_state = copy.deepcopy(self.pipeline.model.state_dict())
+                accumulated_grads = {}
+                probe_hooks = []
+                
+                def get_acc_hook(name_loc):
+                    def hook(grad):
+                        with torch.no_grad():
+                            if name_loc not in accumulated_grads:
+                                accumulated_grads[name_loc] = torch.zeros_like(grad.detach().cpu())
+                            accumulated_grads[name_loc] += grad.detach().cpu().abs()
+                        return grad
+                    return hook
+
+                for name, param in self.pipeline.model.named_parameters():
+                    if param.requires_grad:
+                        probe_hooks.append(param.register_hook(get_acc_hook(name)))
+                
+                try:
+                    probe_steps = getattr(self.args, 'probe_steps', 10)
+                    self._custom_fit(
+                        inputs=train_inputs,
+                        num_steps=probe_steps,
+                        learning_rate=self.args.learning_rate,
+                        batch_size=ft_batch_size,
+                    )
+                except Exception as e:
+                    print(f"Warning: Probe failed: {e}")
+
+                for h in probe_hooks:
+                    h.remove()
+                
+                self.pipeline.model.load_state_dict(trained_state)
+
+                for name, current_imp in accumulated_grads.items():
+                    if name in self.importance:
+                        self.importance[name] = torch.maximum(self.importance[name], current_imp)
+                    else:
+                        self.importance[name] = current_imp
+                
+                plot_das_heatmap(self.importance, save_path=f"result/das_importance_heatmap{idx + 1}.png")
         
         print("Continual pretraining completed.")
     
