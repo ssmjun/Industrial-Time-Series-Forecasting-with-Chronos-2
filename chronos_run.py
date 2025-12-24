@@ -7,6 +7,10 @@ from torch import optim
 import torch.nn as nn
 import argparse
 import os
+import warnings
+
+# Suppress FutureWarning from pandas concat
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 from utils.set_seed import set_seed
 from utils.util import plot_forecast
@@ -56,6 +60,7 @@ def get_argument_parser():
     parser.add_argument('--fine_tune', default = False, action='store_true', help='fine-tune Chronos-2 model')
     parser.add_argument('--continual_pretrain', default = False, action='store_true', help='continual pretrain Chronos-2 model')
     parser.add_argument('--use_das', default = False, action='store_true', help='use DAS for continual pretraining')
+    parser.add_argument('--evaluate_naive', default = False, action='store_true', help='use naive method')
 
     #args = parser.parse_args(args=[])
     args = parser.parse_args()
@@ -124,6 +129,15 @@ if __name__ == "__main__":
     metrics_df = None
     pred_df = None
     y_true_df = None
+    context_df = None
+
+    if args.evaluate_naive:
+        print("Running naive method...")
+        # Implement naive method logic here
+        # For example, you might want to generate predictions using a simple baseline
+        # and then calculate metrics accordingly.
+        metrics_df_mean, metrics_df_last = forecaster.evaluate_naive(data_loader['test'])
+        print("Naive method completed.")
 
     if args.use_chronos and args.continual_pretrain:
         print("\n" + "=" * 80)
@@ -148,21 +162,22 @@ if __name__ == "__main__":
         forecaster.fine_tune(data_loader)
         
         # 3. Inference
-        metrics_df, pred_df, y_true_df = forecaster.run(data_loader)
+        metrics_df, pred_df, y_true_df, context_df = forecaster.run(data_loader)
         
         print("Chronos-2 inference with continual pretraining + fine-tuning completed.")
 
     elif args.use_chronos and args.fine_tune and not args.continual_pretrain:
         forecaster.fine_tune(data_loader)
         print("Chronos-2 fine-tuning completed.")
-        metrics_df, pred_df, y_true_df = forecaster.run(data_loader)
+        metrics_df, pred_df, y_true_df, context_df = forecaster.run(data_loader)
     
     elif args.use_chronos:
-        metrics_df, pred_df, y_true_df = forecaster.run(data_loader)
+        metrics_df, pred_df, y_true_df, context_df = forecaster.run(data_loader)
         print("Chronos-2 zero-shot inference completed.")
 
+
     # Determine experiment ID based on args
-    exp_id = "Unknown"
+    exp_id = "unknown"
     if args.use_chronos:
         if args.continual_pretrain:
             if args.use_das:
@@ -188,20 +203,90 @@ if __name__ == "__main__":
                     exp_id = "2. With Covariates, No Cross Learning"
             else:
                 exp_id = "1. No Covariates, No Cross Learning"
-
+    elif args.evaluate_naive:
+        exp_id = "0. Naive"
+    
     # Plotting logic for MSE quartiles
     if metrics_df is not None and pred_df is not None and y_true_df is not None:
         print("\nGenerating plots for MSE quartiles (0%, 25%, 50%, 75%, 100%)...")
         
-        quantiles = [0.0, 0.25, 0.5, 0.75, 1.0]
-        selected_ids = []
-        sorted_metrics = metrics_df.sort_values(by='mse')
-        n = len(sorted_metrics)
+        # Keep a list of quantiles for plotting, but export ALL test ids to CSV.
+        quantiles = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
 
-        for q in quantiles:
-            idx = int((n - 1) * q)
-            row = sorted_metrics.iloc[idx]
-            selected_ids.append((q, row['id'], row['mse']))
+        # All test-set sequence ids sorted by MSE (for CSV export)
+        sorted_metrics = metrics_df.sort_values(by='mse').reset_index(drop=True)
+        selected_ids_all = []
+        n = len(sorted_metrics)
+        if n > 0:
+            for idx, row in sorted_metrics.iterrows():
+                q = idx / (n - 1) if n > 1 else 0.0
+                selected_ids_all.append((q, row['id'], row['mse']))
+
+        # Quantile-based selection for plotting only
+        selected_ids_plot = []
+        if n > 0:
+            for q in quantiles:
+                idx = int((n - 1) * q)
+                row = sorted_metrics.iloc[idx]
+                selected_ids_plot.append((q, row['id'], row['mse']))
+
+        # Export predictions for ALL test sequences to CSV
+        print("Exporting all test-sequence predictions to CSV...")
+        export_list = []
+        for q, sid, mse in selected_ids_all:
+            # Get predictions and true values for this ID
+            sub_pred = pred_df[pred_df['id'] == sid].copy()
+            sub_true = y_true_df[y_true_df['id'] == sid].copy()
+            
+            # Merge on id and TimeStamp
+            merged_sub = pd.merge(sub_true, sub_pred, on=['id', 'TimeStamp'], how='inner')
+            
+            # Rename quantile columns for clarity if they exist
+            rename_map = {}
+            if '0.1' in merged_sub.columns: rename_map['0.1'] = 'pred_lower_0.1'
+            if '0.9' in merged_sub.columns: rename_map['0.9'] = 'pred_upper_0.9'
+            if '0.5' in merged_sub.columns: rename_map['0.5'] = 'pred_median_0.5'
+            
+            if rename_map:
+                merged_sub.rename(columns=rename_map, inplace=True)
+            
+            # Add info about which quantile of MSE this represents
+            merged_sub['mse_quantile_rank'] = q
+            merged_sub['mse_value'] = mse
+            
+            # Add context data if available
+            if context_df is not None:
+                sub_context = context_df[context_df['id'] == sid].copy()
+                if not sub_context.empty:
+                    # Keep only essential columns from context (TimeStamp, target, id)
+                    # This ensures other columns (like covariates) are blank/NaN in the context rows
+                    keep_cols = ['id', 'TimeStamp', args.target]
+                    sub_context = sub_context[[c for c in keep_cols if c in sub_context.columns]]
+                    
+                    # Add missing columns from merged_sub with NaN
+                    for col in merged_sub.columns:
+                        if col not in sub_context.columns:
+                            sub_context[col] = np.nan
+                            
+                    # Ensure mse info is present in context rows too
+                    sub_context['mse_quantile_rank'] = q
+                    sub_context['mse_value'] = mse
+                    
+                    # Reorder to match merged_sub
+                    sub_context = sub_context[merged_sub.columns]
+                    
+                    # Concatenate context and prediction
+                    merged_sub = pd.concat([sub_context, merged_sub], ignore_index=True)
+                    merged_sub.sort_values('TimeStamp', inplace=True)
+            
+            export_list.append(merged_sub)
+            
+        if export_list:
+            export_df = pd.concat(export_list, ignore_index=True)
+            safe_exp_id = exp_id.replace(" ", "_").replace(".", "").replace(",", "").replace("+", "plus")
+            csv_path = f'result/EX{safe_exp_id}_quantile_predictions.csv'
+            export_df.to_csv(csv_path, index=False)
+            print(f"Saved quantile predictions to {csv_path}")
 
         fig, axes = plt.subplots(5, 1, figsize=(15, 25))
         if len(quantiles) == 1:
@@ -210,7 +295,7 @@ if __name__ == "__main__":
         # Add experiment title to the figure
         fig.suptitle(f"Experiment: {exp_id} with mean MSE = {metrics_df['mse'].mean():.2f}", fontsize=16, y=0.99)
 
-        for (q, sid, mse), ax in zip(selected_ids, axes):
+        for (q, sid, mse), ax in zip(selected_ids_plot, axes):
             plot_forecast(
                 context_df=pd.DataFrame(), # Context not used in current util.py implementation
                 pred_df=pred_df,
@@ -249,6 +334,18 @@ if __name__ == "__main__":
                 f.write(f"  MAE: {mean_metrics['mae']:.4f}\n")
             else:
                 f.write("\nMetrics: None (Inference not run or failed)\n")
+            
+            #naive_metrics_df = None
+            #naive_metrics_df = forecaster.evaluate_naive(data_loader['test'])
+
+
+            #if naive_metrics_df is not None:
+            #    mean_naive = naive_metrics_df[['mse', 'rmse', 'mae']].mean()
+            #    f.write(f"\nNaive Forecast Metrics (Average):\n")
+            #    f.write(f"  MSE: {mean_naive['mse']:.4f}\n")
+            #    f.write(f"  RMSE: {mean_naive['rmse']:.4f}\n")
+            #    f.write(f"  MAE: {mean_naive['mae']:.4f}\n")
+
             f.write(f"{'='*60}\n")
         
         print(f"Appended experiment results to {log_path}")
