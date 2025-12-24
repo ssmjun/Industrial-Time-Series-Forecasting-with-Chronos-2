@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 
+
 class Dataset_Custom(Dataset):
     def __init__(self, data, flag, configs, scale = True):
 
@@ -44,7 +45,15 @@ class Dataset_Custom(Dataset):
         cols = list(df_raw.columns)
         cols.remove(self.target)
         cols.remove('TimeStamp')
-        df_raw = df_raw[['TimeStamp'] + cols + [self.target]]
+        if 'outlier' in cols:
+            cols.remove('outlier')
+
+        # Reconstruct df_raw with TimeStamp, cols, target, and outlier (if present)
+        ordered_cols = ['TimeStamp'] + cols + [self.target]
+        if 'outlier' in df_raw.columns:
+             ordered_cols.append('outlier')
+        
+        df_raw = df_raw[ordered_cols]
 
         num_train = int(len(self.using_index_list) * 0.8)
         num_test = int(len(self.using_index_list) * 0.1)
@@ -76,8 +85,13 @@ class Dataset_Custom(Dataset):
 
             data = np.concatenate((data_x,data_y), axis = 1)
 
+            # Update self.data with normalized values
+            df_raw[cols] = data_x
+            df_raw[[self.target]] = data_y
+            self.data = df_raw
+
         else:
-            data = df_data.values
+            data = df_data[cols + [self.target]].values
 
         df_stamp = df_raw[['TimeStamp']][border1:border2]
         df_stamp['TimeStamp'] = pd.to_datetime(df_stamp['TimeStamp'])
@@ -120,8 +134,8 @@ class Dataset_Custom(Dataset):
         return len(self.using_index_list)
 
     def get_using_index(self):
-        """연속된 시간 구간이며(outlier 없고), 
-        seq_len + pred_len 만큼의 길이를 만족하는 경우의 인덱스 리스트 반환"""
+        #연속된 시간 구간이며(outlier 없고), 
+        #seq_len + pred_len 만큼의 길이를 만족하는 경우의 인덱스 리스트 반환
         one = 1
         index_list = []
         for i in range((self.seq_len + self.pred_len), len(self.data)):
@@ -150,7 +164,8 @@ def get_dataloader(data, configs, flag, shuffle=False, drop_last = True):
         batch_size=configs.batch_size,
         shuffle=shuffle,
         num_workers=0,
-        drop_last=drop_last)
+        drop_last=drop_last
+    )
 
     if flag == 'train': return data_loader, y_scaler
     else: return data_loader
