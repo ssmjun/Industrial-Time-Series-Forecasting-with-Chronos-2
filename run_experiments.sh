@@ -18,9 +18,13 @@ print_header() {
 # 실험 시작
 # ==========================================
 
+# 0. Naive Forecast (Mean Value)
+print_header "0. Naive Forecast (Mean Value)"
+python chronos_run.py --evaluate_naive --seq_len 12
+
 # 1. No Covariates, No Cross Learning
 print_header "1. No Covariates, No Cross Learning"
-python chronos_run.py --use_chronos
+python chronos_run.py --use_chronos --seq_len 12
 
 # 2. With Covariates, No Cross Learning
 print_header "2. With Covariates, No Cross Learning"
@@ -42,11 +46,12 @@ python chronos_run.py --use_chronos --fine_tune --use_covariates --use_cross_lea
 # 6. Continual Pretrained Model
 print_header "6. Continual Pretrained Model + Fine-tuning"
 python chronos_run.py --use_chronos --use_covariates --continual_pretrain --fine_tune \
-                    --ft_learning_rate 1e-6 --num_steps 400 --pretrain_steps 400
+                    --ft_learning_rate 1e-6 \
+                    --num_steps 400 --pretrain_steps 400
 
 # 7. Continual Pretrained Model
 print_header "7. Continual Pretrained Model + Fine-tuning + Cross Learning"
-python chronos_run.py --use_chronos --use_covariates --continual_pretrain --fine_tune --use_cross_learning
+python chronos_run.py --use_chronos --use_covariates --continual_pretrain --fine_tune --use_cross_learning --seq_len 12
 
 # 8. Continual Pretrained Model + Fine-tuning + Cross Learning + DAS
 print_header "8. Continual Pretrained Model + Fine-tuning + Cross Learning + Soft-CL"
