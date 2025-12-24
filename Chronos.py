@@ -174,7 +174,7 @@ class ChronosForecaster:
             validation_inputs=val_inputs,
             prediction_length=pred_len,
             num_steps=self.args.num_steps, # As requested in snippet
-            learning_rate=self.args.learning_rate,
+            learning_rate=self.args.ft_learning_rate,
             batch_size=ft_batch_size,
             logging_steps=100
         )
@@ -315,19 +315,11 @@ class ChronosForecaster:
 
             # --- Training ---
             # Use _custom_fit to ensure hooks work on the actual model being trained
-            """
-            self.pipeline = self.pipeline.fit(
-                inputs=train_inputs,
-                prediction_length=self.args.pred_len,
-                num_steps=self.args.pretrain_steps, 
-                learning_rate=self.args.learning_rate,
-                batch_size=ft_batch_size,
-            )
-            """
+
             self._custom_fit(
                 inputs=train_inputs,
                 num_steps=self.args.pretrain_steps, 
-                learning_rate=self.args.learning_rate,
+                learning_rate=self.args.pt_learning_rate,
                 batch_size=ft_batch_size,
             )
 
@@ -360,7 +352,7 @@ class ChronosForecaster:
                     self._custom_fit(
                         inputs=train_inputs,
                         num_steps=probe_steps,
-                        learning_rate=self.args.learning_rate,
+                        learning_rate=self.args.pt_learning_rate,
                         batch_size=ft_batch_size,
                     )
                 except Exception as e:
@@ -393,7 +385,7 @@ class ChronosForecaster:
 
         print(f"Selected {len(self.covariate_list)} covariates: {self.covariate_list}")
 
-        pred_df, y_true_df = self.predict_from_dataloader(data['test'])
+        pred_df, y_true_df, context_df = self.predict_from_dataloader(data['test'])
         
         # Get scaler for inverse transform
         scaler = None
@@ -407,6 +399,10 @@ class ChronosForecaster:
             if self.args.target in y_true_df.columns:
                 y_true_df[self.args.target] = scaler.inverse_transform(y_true_df[[self.args.target]].values).flatten()
             
+            # Inverse transform context
+            if self.args.target in context_df.columns:
+                context_df[self.args.target] = scaler.inverse_transform(context_df[[self.args.target]].values).flatten()
+            
             # Inverse transform predictions (all quantile columns)
             # Filter only numeric columns and exclude id/TimeStamp/Target
             pred_cols = [c for c in pred_df.select_dtypes(include=[np.number]).columns 
@@ -418,7 +414,7 @@ class ChronosForecaster:
 
         metrics_df = self.evaluate(pred_df, y_true_df)
         
-        return metrics_df, pred_df, y_true_df
+        return metrics_df, pred_df, y_true_df, context_df
 
     def evaluate(self, pred_df, y_true_df):
         # Merge to present a comparison table (id, timestamp, y_true, prediction)
@@ -476,6 +472,78 @@ class ChronosForecaster:
         
         return metrics_df
 
+    def evaluate_naive(self, test_loader):
+        """
+        Evaluate Naive Forecast (mean of context window).
+        Returns metrics_df.
+        """
+        print("Evaluating Naive Forecast (Mean Value)...")
+        dataset = test_loader.dataset
+        context_df, _, y_true_df = self._build_zero_shot_dfs(dataset)
+        target_col = self.args.target
+        
+        # Get mean observation from context for each id
+        # context_df has columns: id, TimeStamp, target_col, ...
+        mean_obs = context_df.groupby('id')[target_col].mean().reset_index()
+        mean_obs = mean_obs.rename(columns={target_col: 'y_pred'})
+
+        # Get last observation from context for each id
+        last_obs = context_df.sort_values(['id', 'TimeStamp']).groupby('id').tail(1)[['id', target_col]]
+        last_obs = last_obs.rename(columns={target_col: 'y_pred'})
+        
+        # Merge with y_true_df
+        # y_true_df has ['id', 'TimeStamp', target_col]
+        merged_mean = y_true_df.merge(mean_obs, on='id', how='left')
+        merged_last = y_true_df.merge(last_obs, on='id', how='left')
+        
+        # Inverse transform
+        scaler = None
+        if hasattr(dataset, 'y_scaler'):
+            scaler = dataset.y_scaler
+            
+        if scaler is not None:
+            merged_mean[target_col] = scaler.inverse_transform(merged_mean[[target_col]].values).flatten()
+            merged_mean['y_pred'] = scaler.inverse_transform(merged_mean[['y_pred']].values).flatten()
+
+            merged_last[target_col] = scaler.inverse_transform(merged_last[[target_col]].values).flatten()
+            merged_last['y_pred'] = scaler.inverse_transform(merged_last[['y_pred']].values).flatten()
+
+            
+        # Calculate metrics
+        metrics_mean = []
+        for sid, g in merged_mean.groupby('id'):
+            true_vals = g[target_col].values
+            pred_vals = g['y_pred'].values
+            
+            err = pred_vals - true_vals
+            mse = np.mean(err**2)
+            rmse = np.sqrt(mse)
+            mae = np.mean(np.abs(err))
+            
+            metrics_mean.append({'id': sid, 'mse': mse, 'rmse': rmse, 'mae': mae})
+            
+        metrics_df_mean = pd.DataFrame(metrics_mean)
+        print("\n=== Naive Forecast (Mean Value) Metrics ===")
+        print(metrics_df_mean.describe()[['mse', 'rmse', 'mae']])
+
+        print("\n=== Naive Forecast (Last Value) Metrics ===")
+        metrics_last = []
+        for sid, g in merged_last.groupby('id'):
+            true_vals = g[target_col].values
+            pred_vals = g['y_pred'].values
+            
+            err = pred_vals - true_vals
+            mse = np.mean(err**2)
+            rmse = np.sqrt(mse)
+            mae = np.mean(np.abs(err))
+            
+            metrics_last.append({'id': sid, 'mse': mse, 'rmse': rmse, 'mae': mae})
+            
+        metrics_df_last = pd.DataFrame(metrics_last)
+        print(metrics_df_last.describe()[['mse', 'rmse', 'mae']])
+        
+        return metrics_df_mean, metrics_df_last
+
     def _build_zero_shot_dfs(self, dataset):
         """
         Build context/future/y_true DataFrames from Dataset_Custom.
@@ -488,34 +556,6 @@ class ChronosForecaster:
         target_col = self.args.target
 
         df = dataset.data.copy().reset_index(drop=True)
-        
-        # --- Apply Scaling if available ---
-        if hasattr(dataset, 'scale') and dataset.scale and hasattr(dataset, 'y_scaler'):
-            # Scale Target
-            target_data = df[[target_col]].values
-            df[target_col] = dataset.y_scaler.transform(target_data).flatten()
-            
-            # Scale Covariates
-            if hasattr(dataset, 'x_scaler'):
-                # Dataset_Custom fits x_scaler on all columns except TimeStamp and target.
-                # This includes 'outlier' if it exists. We must include it for transform to work.
-                scaler_cols = [c for c in df.columns if c not in ['TimeStamp', target_col]]
-                
-                try:
-                    # Transform all columns including outlier
-                    scaled_values = dataset.x_scaler.transform(df[scaler_cols].values)
-                    
-                    # Create temporary dataframe to map back to columns
-                    scaled_df = pd.DataFrame(scaled_values, columns=scaler_cols, index=df.index)
-                    
-                    # Update df with scaled values, BUT skip 'outlier' to preserve 0/1 flags for filtering
-                    update_cols = [c for c in scaler_cols if c != 'outlier']
-                    df[update_cols] = scaled_df[update_cols]
-                    
-                except Exception as e:
-                    print(f"Warning: Could not scale features: {e}")
-        # ----------------------------------
-
         time_col = "TimeStamp"
 
         # Determine covariates
@@ -623,7 +663,7 @@ class ChronosForecaster:
 
         pred_df = pd.concat(pred_dfs, ignore_index=True)
 
-        return pred_df, y_true_df
+        return pred_df, y_true_df, context_df
 
 
 __all__ = ["ChronosForecaster"]
